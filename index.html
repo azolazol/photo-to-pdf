@@ -40,15 +40,15 @@
         <div class="field"><label for="fit">사진 배치</label><select id="fit"><option value="contain">전체 사진 표시</option><option value="cover">페이지 채우기</option></select></div>
         <div class="toggle-row"><div><span>페이지 여백</span><small>인쇄할 때 가장자리를 비워 둡니다</small></div><label class="switch"><input id="margin" type="checkbox" checked><i class="slider"></i></label></div>
       </div>
-      <button class="make" id="make" disabled>PDF 만들기</button><p class="status" id="status"></p>
+      <button class="make" id="make" disabled>PDF 만들기</button><p class="status" id="status" role="status" aria-live="polite"></p><div id="result" hidden style="text-align:center;padding:16px;background:#e6f0e9;border-radius:16px;margin-top:12px"><strong>PDF가 준비되었습니다</strong><p style="font-size:13px">아래 버튼으로 열고, 아이폰 공유 메뉴에서 ‘파일에 저장’을 선택하세요.</p><a id="openPdf" class="pick" target="_blank" rel="noopener">PDF 열기 · 저장</a> <a id="downloadPdf" class="pick">다운로드</a></div>
     </section>
-    <p class="foot">사진을 선택하고 PDF를 만들면 기기의 다운로드 또는 공유 메뉴에서 저장할 수 있어요.<br>큰 사진이 많으면 변환 중 Safari 화면을 닫지 말아 주세요.</p>
+    <p class="foot">사진을 선택하고 PDF를 만들면 기기의 다운로드 또는 공유 메뉴에서 저장할 수 있어요.<br>큰 사진이 많으면 변환 중 Safari 화면을 닫지 말아 주세요.<br>v1.0.1 · made by azol</p>
   </main>
   <div class="toast" id="toast"></div>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-  <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
+  <script src="./vendor/jspdf.umd.min.js?v=2.5.2"></script>
+  <script src="./vendor/heic2any.min.js?v=0.0.4" defer></script>
   <script>
-    const $=s=>document.querySelector(s);let photos=[];const input=$('#photos');
+    const $=s=>document.querySelector(s);let photos=[];let resultUrl=null;const input=$('#photos');
     const toast=msg=>{const t=$('#toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2800)};
     const sizeText=n=>n<1024*1024?`${Math.max(1,Math.round(n/1024))} KB`:`${(n/1024/1024).toFixed(1)} MB`;
     function render(){const list=$('#list');list.innerHTML='';$('#empty').style.display=photos.length?'none':'block';$('#count').textContent=`사진 ${photos.length}장`;$('#make').disabled=!photos.length;
@@ -61,18 +61,26 @@
     input.addEventListener('change',async()=>{const files=[...input.files];input.value='';if(!files.length)return;$('#status').textContent='사진을 준비하고 있어요…';let added=0;
       for(const file of files){if(!file.type.startsWith('image/')&&!/\.(heic|heif)$/i.test(file.name)){continue}photos.push({file,name:file.name,url:URL.createObjectURL(file),rotation:0});added++;}
       render();$('#status').textContent='';if(!added)toast('지원되는 사진 파일을 선택해 주세요.');});
-    async function asJpeg(file,quality){let source=file;
-      const heic=/\.(heic|heif)$/i.test(file.name)||/image\/hei[cf]/i.test(file.type);
-      if(heic){if(!window.heic2any)throw new Error('HEIC 변환 모듈을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.');const converted=await heic2any({blob:file,toType:'image/jpeg',quality});source=Array.isArray(converted)?converted[0]:converted;}
-      const url=URL.createObjectURL(source);try{const img=new Image();img.src=url;await img.decode();const canvas=document.createElement('canvas');canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;canvas.getContext('2d').drawImage(img,0,0);return {data:canvas.toDataURL('image/jpeg',quality),width:canvas.width,height:canvas.height};}finally{URL.revokeObjectURL(url)}
+    async function decodePhoto(blob){const url=URL.createObjectURL(blob);try{const img=new Image();img.src=url;await img.decode();return img;}finally{URL.revokeObjectURL(url)}}
+    async function asJpeg(file,quality){
+      let img;try{img=await decodePhoto(file)}catch(error){
+        if(!(/\.(heic|heif)$/i.test(file.name)||/image\/hei[cf]/i.test(file.type)))throw new Error(`${file.name}: 사진을 읽지 못했습니다. 원본 다운로드 상태를 확인해 주세요.`);
+        if(!window.heic2any)throw new Error('HEIC 변환 파일을 불러오지 못했습니다. 페이지를 새로고침해 주세요.');
+        const converted=await heic2any({blob:file,toType:'image/jpeg',quality});img=await decodePhoto(Array.isArray(converted)?converted[0]:converted);
+      }
+      const maxEdge=quality>.9?3000:quality>.7?2200:1400;const scale=Math.min(1,maxEdge/Math.max(img.naturalWidth,img.naturalHeight));
+      const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(img.naturalWidth*scale));canvas.height=Math.max(1,Math.round(img.naturalHeight*scale));
+      const ctx=canvas.getContext('2d');if(!ctx)throw new Error('사진 처리 메모리가 부족합니다. 사진을 나누어 변환해 주세요.');
+      ctx.fillStyle='#ffffff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(img,0,0,canvas.width,canvas.height);
+      const result={data:canvas.toDataURL('image/jpeg',quality),width:canvas.width,height:canvas.height};canvas.width=canvas.height=1;return result;
     }
-    $('#make').addEventListener('click',async()=>{if(!photos.length)return;if(!window.jspdf){toast('PDF 엔진을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.');return;}
-      const button=$('#make'),status=$('#status');button.disabled=true;button.textContent='PDF 준비 중…';const qv={high:.94,medium:.82,small:.62}[$('#quality').value];
+    $('#make').addEventListener('click',async()=>{if(!photos.length)return;if(!window.jspdf?.jsPDF){$('#status').textContent='PDF 생성 파일을 불러오지 못했습니다. 페이지를 새로고침해 주세요.';return;}
+      const button=$('#make'),status=$('#status');button.disabled=true;button.textContent='PDF 준비 중…';$('#result').hidden=true;document.querySelectorAll('input,select,.icon-btn').forEach(el=>el.disabled=true);const qv={high:.94,medium:.82,small:.62}[$('#quality').value];
       try{let doc=null;for(let i=0;i<photos.length;i++){status.textContent=`사진 처리 중 ${i+1} / ${photos.length}`;const im=await asJpeg(photos[i].file,qv);let w,h;if($('#paper').value==='fit'){w=im.width*72/96;h=im.height*72/96;if(w>1440||h>1440){const s=Math.min(1440/w,1440/h);w*=s;h*=s}}else if($('#paper').value==='letter'){w=612;h=792}else{w=595.28;h=841.89}
           const landscape=$('#orientation').value==='landscape';if($('#paper').value!=='fit'&&((landscape&&h>w)||(!landscape&&w>h)))[w,h]=[h,w];if(!doc)doc=new jspdf.jsPDF({orientation:w>h?'landscape':'portrait',unit:'pt',format:[w,h],compress:true});else doc.addPage([w,h],w>h?'landscape':'portrait');
-          const pad=$('#margin').checked?24:0,availW=w-pad*2,availH=h-pad*2;let dw=availW,dh=availH;if($('#fit').value==='contain'){const scale=Math.min(availW/im.width,availH/im.height);dw=im.width*scale;dh=im.height*scale;}else{const scale=Math.max(availW/im.width,availH/im.height);dw=im.width*scale;dh=im.height*scale;}doc.addImage(im.data,'JPEG',(w-dw)/2,(h-dh)/2,dw,dh,undefined,'FAST');}
-        const filename=`사진모음_${new Date().toLocaleDateString('sv-SE')}.pdf`;doc.save(filename);status.textContent=`완료 · ${photos.length}페이지 PDF를 저장했어요.`;toast('PDF를 만들었어요. 파일 앱의 다운로드를 확인해 주세요.');
-      }catch(e){console.error(e);status.textContent='';toast(e.message||'변환 중 문제가 생겼습니다. 사진을 나누어 다시 시도해 주세요.');}finally{button.disabled=!photos.length;button.textContent='PDF 만들기';}});
+          const pad=$('#margin').checked?Math.min(24,w/10,h/10):0,availW=w-pad*2,availH=h-pad*2;let dw=availW,dh=availH;if($('#fit').value==='contain'){const scale=Math.min(availW/im.width,availH/im.height);dw=im.width*scale;dh=im.height*scale;}else{const scale=Math.max(availW/im.width,availH/im.height);dw=im.width*scale;dh=im.height*scale;}doc.saveGraphicsState();doc.rect(pad,pad,availW,availH);doc.clip();doc.discardPath();doc.addImage(im.data,'JPEG',(w-dw)/2,(h-dh)/2,dw,dh,undefined,'FAST');doc.restoreGraphicsState();}
+        const filename=`사진모음_${new Date().toLocaleDateString('sv-SE')}.pdf`;const blob=doc.output('blob');if(resultUrl)URL.revokeObjectURL(resultUrl);resultUrl=URL.createObjectURL(blob);$('#openPdf').href=resultUrl;$('#downloadPdf').href=resultUrl;$('#downloadPdf').download=filename;$('#result').hidden=false;status.textContent=`완료 · ${photos.length}페이지 · ${sizeText(blob.size)}`;$('#result').scrollIntoView({behavior:'smooth',block:'center'});
+      }catch(e){console.error(e);status.textContent=e.message||'변환 중 문제가 생겼습니다. 사진을 나누어 다시 시도해 주세요.';}finally{document.querySelectorAll('input,select').forEach(el=>el.disabled=false);render();button.textContent='PDF 만들기';}});
     render();
   </script>
 </body>
