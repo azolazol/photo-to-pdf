@@ -63,12 +63,28 @@
     return [...numbers].sort((a,b)=>a-b);
   }
   function blobFromCanvas(canvas,type){return new Promise((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(new Error('이미지를 저장할 수 없습니다. 해상도를 낮춰 주세요.')),type,type==='image/jpeg'?.88:undefined));}
+  let workerLibraryPromise=null;
+  function loadWorkerLibrary(){
+    if(window.pdfjsWorker?.WorkerMessageHandler)return Promise.resolve();
+    if(!workerLibraryPromise)workerLibraryPromise=new Promise((resolve,reject)=>{
+      const script=document.createElement('script');
+      script.src='./vendor/pdf.worker.min.js?v=3.11.174-fix1';
+      script.onload=()=>window.pdfjsWorker?.WorkerMessageHandler?resolve():reject(new Error('PDF 처리 파일을 실행하지 못했습니다. Safari에서 페이지를 새로고침해 주세요.'));
+      script.onerror=()=>reject(new Error('PDF 처리 파일을 불러오지 못했습니다. 네트워크를 확인하고 다시 시도해 주세요.'));
+      document.head.append(script);
+    }).catch(error=>{workerLibraryPromise=null;throw error;});
+    return workerLibraryPromise;
+  }
   $('convert').addEventListener('click',async()=>{
     if(!file||busy)return;
     if(!window.pdfjsLib){$('status').textContent='PDF 처리 파일을 불러오지 못했습니다. 페이지를 새로고침해 주세요.';return;}
     busy=true;$('convert').disabled=true;clearResults();let doc=null;
     try{
-      pdfjsLib.GlobalWorkerOptions.workerSrc='./vendor/pdf.worker.min.js?v=3.11.174';
+      // iOS 앱 내 브라우저에서 Worker 생성 후 대체 실행이 실패할 수 있어
+      // 처리 코드를 먼저 같은 페이지에 로드해 PDF.js의 대체 경로를 사용한다.
+      $('status').textContent='PDF 처리 파일 준비 중…';
+      await loadWorkerLibrary();
+      pdfjsLib.GlobalWorkerOptions.workerSrc='./vendor/pdf.worker.min.js?v=3.11.174-fix1';
       const data=new Uint8Array(await file.arrayBuffer());doc=await pdfjsLib.getDocument({data}).promise;
       const pages=parsePages($('pages').value,doc.numPages);
       if(pages.length>100)throw new Error('한 번에 100페이지까지 변환할 수 있습니다. 페이지 범위를 나누어 주세요.');
